@@ -37,7 +37,7 @@ static void cleanup(int shmfd, Shared* shm) {
 int main() {
     signal(SIGINT, on_sigint);
 
-    // 1️⃣ Tạo đối tượng shared memory
+    // Tạo đối tượng shared memory
     int shmfd = shm_open(SHM_NAME, O_CREAT|O_RDWR, 0666);
     if (shmfd < 0) { perror("shm_open"); return 1; }
     if (ftruncate(shmfd, sizeof(Shared)) == -1) { perror("ftruncate"); return 1; }
@@ -115,7 +115,7 @@ int main() {
         sem_destroy(&shm->mutex);
         cleanup(shmfd, shm);
 
-        printf("✅ Done. Check output.txt\n");
+        printf(" Done. Check output.txt\n");
         return 0;
     }
 }

@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "gcc build",
+      "type": "shell",
+      "command": "/usr/bin/gcc",
+      "args": ["-g", "shm_file_demo.c", "-o", "shm_file_demo", "-pthread"],
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    }
+  ]
+}

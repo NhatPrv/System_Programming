@@ -1,0 +1,8 @@
+Terminal A (reader):
+./reader -o output.txt -n /shm_file_demo
+
+Terminal B (writer):
+./writer -i input.txt -n /shm_file_demo
+
+Xong demo, nếu muốn xoá đối tượng shm:
+./cleanup /shm_file_demo

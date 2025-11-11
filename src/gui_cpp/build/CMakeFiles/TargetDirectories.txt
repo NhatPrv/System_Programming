@@ -1,0 +1,3 @@
+/home/nhat/Semester5/System_Programming/Final/src/gui_cpp/build/CMakeFiles/shm_imgui.dir
+/home/nhat/Semester5/System_Programming/Final/src/gui_cpp/build/CMakeFiles/edit_cache.dir
+/home/nhat/Semester5/System_Programming/Final/src/gui_cpp/build/CMakeFiles/rebuild_cache.dir

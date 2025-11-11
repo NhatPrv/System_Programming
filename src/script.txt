@@ -1,0 +1,429 @@
+================================================================================
+                    SCRIPT THUYẾT TRÌNH - SHARED MEMORY DEMO
+================================================================================
+
+I. BẢN TIẾNG VIỆT
+
+--------------------------------------------------------------------------------
+1. TỔNG QUAN CHƯƠNG TRÌNH
+--------------------------------------------------------------------------------
+
+Chào thầy/cô và các bạn. Hôm nay em xin trình bày đồ án về giao tiếp giữa các 
+tiến trình (Inter-Process Communication) sử dụng POSIX Shared Memory.
+
+* Ngôn ngữ lập trình: C
+* Công cụ build: GNU Make
+* Hệ điều hành: Linux
+* Thư viện: POSIX shared memory (shm_open, mmap) và POSIX semaphores
+
+Chương trình mô phỏng mô hình Producer-Consumer với:
+- Writer: đóng vai producer, đọc dữ liệu từ file input và đẩy vào shared memory
+- Reader: đóng vai consumer, lấy dữ liệu từ shared memory và ghi ra file output
+- Cleanup: công cụ để xóa shared memory object sau khi demo
+
+Cấu trúc dự án gồm:
+- shared.h: định nghĩa cấu trúc dùng chung (vòng đệm, semaphore, hằng số)
+- writer.c: chương trình producer
+- reader.c: chương trình consumer
+- cleanup.c: tiện ích dọn dẹp
+- Makefile: tự động hóa build
+- input.txt: file dữ liệu nguồn
+- output.txt: file kết quả sau khi reader xử lý
+
+--------------------------------------------------------------------------------
+2. LUỒNG HOẠT ĐỘNG CHI TIẾT
+--------------------------------------------------------------------------------
+
+A. CƠ CHẾ ĐỒNG BỘ HÓA
+
+Chương trình sử dụng 3 semaphore để đồng bộ hóa:
+- empty: đếm số ô trống trong vòng đệm (khởi tạo = CAP = 4)
+- full: đếm số ô chứa dữ liệu (khởi tạo = 0)
+- mutex: bảo vệ critical section khi truy cập vòng đệm
+
+Vòng đệm (ring buffer) có dung lượng 4 message, mỗi message tối đa 128 ký tự.
+
+B. THÀNH PHẦN WRITER (PRODUCER)
+
+Chức năng:
+- Mở/tạo shared memory object với tên được chỉ định (mặc định /shm_file_demo)
+- Nếu là creator (tạo mới): khởi tạo semaphore với pshared=1, ftruncate size
+- Đọc từng dòng từ file input.txt
+- Với mỗi dòng:
+  + Chờ có ô trống (sem_wait(&empty))
+  + Vào critical section (sem_wait(&mutex))
+  + Ghi message vào buf[in], tăng in = (in+1) % CAP
+  + Thoát critical section (sem_post(&mutex))
+  + Báo có dữ liệu mới (sem_post(&full))
+- Sau khi đọc hết file, gửi END_TOKEN để báo hiệu kết thúc
+- Không xóa shared memory để reader còn đọc được
+
+Tham số:
+-i <file>   : đường dẫn file input (mặc định: input.txt)
+-n <name>   : tên shared memory (mặc định: /shm_file_demo)
+
+C. THÀNH PHẦN READER (CONSUMER)
+
+Chức năng:
+- Chờ shared memory xuất hiện (timeout mặc định 5 giây, có thể tăng bằng -w)
+- Mở shared memory đã được writer tạo
+- Vòng lặp tiêu thụ:
+  + Chờ có dữ liệu (sem_wait(&full))
+  + Vào critical section (sem_wait(&mutex))
+  + Đọc message từ buf[out], tăng out = (out+1) % CAP
+  + Thoát critical section (sem_post(&mutex))
+  + Báo có ô trống (sem_post(&empty))
+  + Nếu gặp END_TOKEN: thoát vòng lặp
+  + Ngược lại: ghi message ra file output.txt
+- Đóng file và giải phóng tài nguyên
+
+Tham số:
+-o <file>   : đường dẫn file output (mặc định: output.txt)
+-n <name>   : tên shared memory (mặc định: /shm_file_demo)
+-w <seconds>: thời gian chờ writer tạo shm (mặc định: 5 giây)
+
+D. THÀNH PHẦN CLEANUP
+
+Chức năng:
+- Xóa tên shared memory khỏi hệ thống (shm_unlink)
+- Dùng để reset trạng thái trước khi chạy demo mới
+- Không ảnh hưởng đến process đang dùng shm (unmap khi hết tham chiếu)
+
+Tham số:
+<name>      : tên shared memory cần xóa (ví dụ: /shm_file_demo)
+
+--------------------------------------------------------------------------------
+3. THỨ TỰ CHẠY VÀ LÝ DO
+--------------------------------------------------------------------------------
+
+CÓ HAI CÁCH CHẠY:
+
+CÁCH 1: CHẠY READER TRƯỚC (KHUYẾN NGHỊ ĐỂ DEMO)
+
+Bước 1: Dọn shared memory cũ (nếu có)
+  ./cleanup /shm_file_demo || true
+
+Bước 2: Chạy reader trước ở Terminal A
+  ./reader -o output.txt -n /shm_file_demo -w 10 &
+  
+  Lý do:
+  - Reader sẽ chờ (polling mỗi 100ms) cho đến khi writer tạo shared memory
+  - Tham số -w 10 cho phép chờ tối đa 10 giây
+  - Chạy background (&) để không block terminal
+  - Minh họa rõ ràng tính năng chờ đợi và đồng bộ
+
+Bước 3: Chạy writer ở Terminal B
+  ./writer -i input.txt -n /shm_file_demo
+  
+  Lý do:
+  - Writer tạo và khởi tạo shared memory + semaphore
+  - Đẩy dữ liệu từ input.txt vào vòng đệm
+  - Reader sẽ phát hiện shm xuất hiện và bắt đầu tiêu thụ
+  - Gửi END_TOKEN để báo kết thúc
+
+Bước 4: Đợi cả hai process kết thúc
+  wait
+
+Bước 5: Kiểm tra kết quả
+  cat -n output.txt
+
+LÝ DO CHẠY READER TRƯỚC:
++ Minh họa tính năng chờ đợi (polling) của reader
++ Dễ quan sát sự đồng bộ giữa hai tiến trình
++ Phù hợp với mô hình thực tế: consumer sẵn sàng trước khi producer bắt đầu
++ Tránh mất dữ liệu nếu writer chạy quá nhanh
+
+CÁCH 2: CHẠY WRITER TRƯỚC (AN TOÀN HƠN)
+
+Bước 1: Dọn shared memory cũ
+  ./cleanup /shm_file_demo || true
+
+Bước 2: Chạy writer trước ở Terminal A
+  ./writer -i input.txt -n /shm_file_demo
+  
+Bước 3: Chạy reader ở Terminal B
+  ./reader -o output.txt -n /shm_file_demo
+
+Bước 4: Kiểm tra kết quả
+  cat -n output.txt
+
+LÝ DO CHẠY WRITER TRƯỚC:
++ An toàn hơn: shared memory đã sẵn sàng
++ Không cần chờ timeout
++ Writer đã khởi tạo đầy đủ cấu trúc dữ liệu
++ Phù hợp khi không chắc chắn về timing
+
+LƯU Ý QUAN TRỌNG:
+- Cả hai cách đều ĐÚNG và AN TOÀN nhờ cơ chế semaphore
+- Reader VÀO SAU KHÔNG XÓA dữ liệu cũ trong shared memory
+- Muốn chạy demo mới hoàn toàn: gọi ./cleanup trước
+- Tham số -n phải GIỐNG NHAU ở cả reader và writer
+- Tên shared memory phải bắt đầu bằng dấu / (POSIX format)
+
+--------------------------------------------------------------------------------
+4. DEMO THỰC TÊ
+--------------------------------------------------------------------------------
+
+[Thực hiện các bước trên máy tính, mở 2 terminal song song]
+
+Terminal A:
+$ ./cleanup /shm_file_demo || true
+$ ./reader -o output.txt -n /shm_file_demo -w 10 &
+[reader] đang chờ shared memory xuất hiện...
+
+Terminal B:
+$ ./writer -i input.txt -n /shm_file_demo
+[writer] created and initialized SHM '/shm_file_demo'
+[writer] done.
+
+Terminal A (tiếp):
+[reader] wrote: dòng dữ liệu 1
+[reader] wrote: dòng dữ liệu 2
+[reader] wrote: dòng dữ liệu 3
+[reader] got END, exit.
+
+$ cat -n output.txt
+     1  dòng dữ liệu 1
+     2  dòng dữ liệu 2
+     3  dòng dữ liệu 3
+
+Dọn dẹp sau demo:
+$ ./cleanup /shm_file_demo
+Unlinked SHM '/shm_file_demo'
+
+--------------------------------------------------------------------------------
+5. KẾT LUẬN
+--------------------------------------------------------------------------------
+
+Chương trình đã minh họa thành công:
+✓ Giao tiếp giữa các tiến trình qua POSIX shared memory
+✓ Đồng bộ hóa bằng semaphore (empty, full, mutex)
+✓ Mô hình Producer-Consumer với vòng đệm
+✓ Xử lý tình huống reader chờ writer (polling với timeout)
+✓ Kết thúc an toàn bằng END_TOKEN
+✓ Quản lý tài nguyên và cleanup
+
+Ưu điểm của POSIX shared memory:
++ Hiệu năng cao (không qua kernel cho mỗi read/write)
++ Dễ dùng với mmap
++ Hỗ trợ semaphore process-shared
++ Portable trên các hệ UNIX/Linux
+
+Em xin cảm ơn thầy/cô và các bạn đã lắng nghe!
+
+
+================================================================================
+================================================================================
+
+II. ENGLISH VERSION
+
+--------------------------------------------------------------------------------
+1. PROGRAM OVERVIEW
+--------------------------------------------------------------------------------
+
+Hello professor and everyone. Today I will present my project on Inter-Process 
+Communication (IPC) using POSIX Shared Memory.
+
+* Programming language: C
+* Build tool: GNU Make
+* Operating system: Linux
+* Libraries: POSIX shared memory (shm_open, mmap) and POSIX semaphores
+
+The program simulates the Producer-Consumer model with:
+- Writer: acts as producer, reads data from input file and pushes to shared memory
+- Reader: acts as consumer, retrieves data from shared memory and writes to output file
+- Cleanup: utility to remove shared memory object after demo
+
+Project structure includes:
+- shared.h: defines shared structures (ring buffer, semaphores, constants)
+- writer.c: producer program
+- reader.c: consumer program
+- cleanup.c: cleanup utility
+- Makefile: automated build
+- input.txt: source data file
+- output.txt: result file after reader processing
+
+--------------------------------------------------------------------------------
+2. DETAILED WORKFLOW
+--------------------------------------------------------------------------------
+
+A. SYNCHRONIZATION MECHANISM
+
+The program uses 3 semaphores for synchronization:
+- empty: counts empty slots in ring buffer (initialized = CAP = 4)
+- full: counts filled slots (initialized = 0)
+- mutex: protects critical section when accessing ring buffer
+
+Ring buffer has capacity of 4 messages, each message max 128 characters.
+
+B. WRITER COMPONENT (PRODUCER)
+
+Functions:
+- Open/create shared memory object with specified name (default /shm_file_demo)
+- If creator (newly created): initialize semaphores with pshared=1, ftruncate size
+- Read each line from input.txt file
+- For each line:
+  + Wait for empty slot (sem_wait(&empty))
+  + Enter critical section (sem_wait(&mutex))
+  + Write message to buf[in], increment in = (in+1) % CAP
+  + Exit critical section (sem_post(&mutex))
+  + Signal new data available (sem_post(&full))
+- After reading entire file, send END_TOKEN to signal completion
+- Do not delete shared memory so reader can still read
+
+Parameters:
+-i <file>   : input file path (default: input.txt)
+-n <name>   : shared memory name (default: /shm_file_demo)
+
+C. READER COMPONENT (CONSUMER)
+
+Functions:
+- Wait for shared memory to appear (default timeout 5 seconds, increase with -w)
+- Open shared memory created by writer
+- Consumption loop:
+  + Wait for data (sem_wait(&full))
+  + Enter critical section (sem_wait(&mutex))
+  + Read message from buf[out], increment out = (out+1) % CAP
+  + Exit critical section (sem_post(&mutex))
+  + Signal empty slot (sem_post(&empty))
+  + If END_TOKEN encountered: exit loop
+  + Otherwise: write message to output.txt file
+- Close file and release resources
+
+Parameters:
+-o <file>   : output file path (default: output.txt)
+-n <name>   : shared memory name (default: /shm_file_demo)
+-w <seconds>: wait time for writer to create shm (default: 5 seconds)
+
+D. CLEANUP COMPONENT
+
+Functions:
+- Remove shared memory name from system (shm_unlink)
+- Used to reset state before running new demo
+- Does not affect processes currently using shm (unmaps when no references remain)
+
+Parameters:
+<name>      : shared memory name to delete (example: /shm_file_demo)
+
+--------------------------------------------------------------------------------
+3. EXECUTION ORDER AND RATIONALE
+--------------------------------------------------------------------------------
+
+TWO EXECUTION METHODS:
+
+METHOD 1: RUN READER FIRST (RECOMMENDED FOR DEMO)
+
+Step 1: Clean up old shared memory (if any)
+  ./cleanup /shm_file_demo || true
+
+Step 2: Run reader first in Terminal A
+  ./reader -o output.txt -n /shm_file_demo -w 10 &
+  
+  Rationale:
+  - Reader will wait (polling every 100ms) until writer creates shared memory
+  - Parameter -w 10 allows waiting up to 10 seconds
+  - Run in background (&) to not block terminal
+  - Clearly demonstrates waiting and synchronization features
+
+Step 3: Run writer in Terminal B
+  ./writer -i input.txt -n /shm_file_demo
+  
+  Rationale:
+  - Writer creates and initializes shared memory + semaphores
+  - Pushes data from input.txt into ring buffer
+  - Reader will detect shm appearance and start consuming
+  - Sends END_TOKEN to signal completion
+
+Step 4: Wait for both processes to finish
+  wait
+
+Step 5: Check results
+  cat -n output.txt
+
+REASONS TO RUN READER FIRST:
++ Demonstrates reader's waiting (polling) feature
++ Easy to observe synchronization between two processes
++ Fits real-world model: consumer ready before producer starts
++ Avoids data loss if writer runs too fast
+
+METHOD 2: RUN WRITER FIRST (SAFER)
+
+Step 1: Clean up old shared memory
+  ./cleanup /shm_file_demo || true
+
+Step 2: Run writer first in Terminal A
+  ./writer -i input.txt -n /shm_file_demo
+  
+Step 3: Run reader in Terminal B
+  ./reader -o output.txt -n /shm_file_demo
+
+Step 4: Check results
+  cat -n output.txt
+
+REASONS TO RUN WRITER FIRST:
++ Safer: shared memory already ready
++ No timeout waiting needed
++ Writer has fully initialized data structures
++ Suitable when uncertain about timing
+
+IMPORTANT NOTES:
+- Both methods are CORRECT and SAFE thanks to semaphore mechanism
+- Reader JOINING LATER DOES NOT DELETE old data in shared memory
+- To run completely new demo: call ./cleanup first
+- Parameter -n must be IDENTICAL for both reader and writer
+- Shared memory name must start with / (POSIX format)
+
+--------------------------------------------------------------------------------
+4. LIVE DEMO
+--------------------------------------------------------------------------------
+
+[Execute steps on computer, open 2 terminals side by side]
+
+Terminal A:
+$ ./cleanup /shm_file_demo || true
+$ ./reader -o output.txt -n /shm_file_demo -w 10 &
+[reader] waiting for shared memory to appear...
+
+Terminal B:
+$ ./writer -i input.txt -n /shm_file_demo
+[writer] created and initialized SHM '/shm_file_demo'
+[writer] done.
+
+Terminal A (continued):
+[reader] wrote: data line 1
+[reader] wrote: data line 2
+[reader] wrote: data line 3
+[reader] got END, exit.
+
+$ cat -n output.txt
+     1  data line 1
+     2  data line 2
+     3  data line 3
+
+Cleanup after demo:
+$ ./cleanup /shm_file_demo
+Unlinked SHM '/shm_file_demo'
+
+--------------------------------------------------------------------------------
+5. CONCLUSION
+--------------------------------------------------------------------------------
+
+The program successfully demonstrates:
+✓ Inter-process communication via POSIX shared memory
+✓ Synchronization using semaphores (empty, full, mutex)
+✓ Producer-Consumer model with ring buffer
+✓ Handling reader waiting for writer (polling with timeout)
+✓ Safe termination using END_TOKEN
+✓ Resource management and cleanup
+
+Advantages of POSIX shared memory:
++ High performance (no kernel involvement for each read/write)
++ Easy to use with mmap
++ Supports process-shared semaphores
++ Portable across UNIX/Linux systems
+
+Thank you for your attention!
+
+================================================================================
+                                    END
+================================================================================
